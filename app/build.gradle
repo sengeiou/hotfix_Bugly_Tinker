@@ -1,0 +1,71 @@
+apply plugin: 'com.android.application'
+
+android {
+    compileSdkVersion 25
+    buildToolsVersion "25.0.2"
+    defaultConfig {
+        applicationId "com.bugly.tinker.demo2"
+        minSdkVersion 14
+        targetSdkVersion 25
+        versionCode 3
+        versionName "3.0"
+        testInstrumentationRunner "android.support.test.runner.AndroidJUnitRunner"
+
+        //multi dex 支持
+//        multiDexEnabled true
+
+        ndk {
+            //设置支持的SO库架构
+            abiFilters 'armeabi' , 'x86', 'armeabi-v7a', 'x86_64', 'arm64-v8a'
+        }
+    }
+    buildTypes {
+        debug {
+            versionNameSuffix "-debug"
+            minifyEnabled false
+            shrinkResources false
+        }
+        release {
+            minifyEnabled true
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    //----------------------签名配置----------------------
+    signingConfigs {
+        debug {
+            //为了方便测试分享或第三方登录  使用正式签名
+            storeFile file('release.jks')
+            storePassword 'zhangquan'
+            keyAlias 'zhangquan'
+            keyPassword 'zhangquan'
+        }
+        release {
+            storeFile file('release.jks')
+            storePassword 'zhangquan'
+            keyAlias 'zhangquan'
+            keyPassword 'zhangquan'
+        }
+    }
+
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
+        release {
+            signingConfig signingConfigs.release
+        }
+    }
+}
+
+dependencies {
+    compile fileTree(include: ['*.jar'], dir: 'libs')
+    compile 'com.android.support:multidex:1.0.1'
+    // 多dex配置
+    compile 'com.tencent.bugly:crashreport_upgrade:latest.release'
+    // 升级SDK
+//    compile 'com.tencent.bugly:nativecrashreport:latest.release'
+    compile 'com.android.support:support-v4:25.1.1'
+}
+// 依赖插件脚本
+apply from: 'tinker-support.gradle'

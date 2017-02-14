@@ -1,0 +1,98 @@
+apply plugin: 'com.tencent.bugly.tinker-support'
+
+def bakPath = file("${buildDir}/bakApk/")
+
+/**
+ * 此处填写每次构建生成的基准包目录
+ */
+def baseApkDir = "app-0214-14-21-46"
+def base_TinkerId="3.0.1-patch"
+/**
+ * 1、基准版需要集成bugly sdk，tinkerId="1.0-base"；并安装上报联网
+ * 2、对基准包的bug修复（可以是Java代码变更，资源的变更）
+ * 3、修改tinkerId，与上次不一样，且是唯一的
+ * 4、执行tinkerPatchRelease打Release版本补丁包
+ * 5、选择app/build/outputs/patch目录下的补丁包并上传（注：不要选择tinkerPatch目录下的补丁包，不然上传会有问题）
+ * 6、重启基准包，请求补丁策略（SDK会自动下载补丁并合成）（注意：app需要杀死进程重启）
+ * 7、再次重启基准包，检验补丁应用结果 （注意：app需要杀死进程重启）
+ *
+ * 注意：补丁是对基准包打的，并且tinkerId与基准包的不一样。
+ * 比如 V1(tinkerId=1.0.0-base)--（发现bug1,生成patch1和V1的修复版，tinkerId=1.0.1-patch）---(倒霉的又继续发现bug，生成patch2,tinkerId=1.0.2-patch)
+ *   两次补丁都是针对V1基准包来打的。此时V1可以升到补丁2，补丁1的用户也可以升级到补丁2
+ *   继续开发，发布版本V2(tinkerId=2.0.0-base),则之前V1的用户可以升级到V2，此时发现bug，则针对以V2为基准包打补丁，thinkerId=2.0.1-patch
+ */
+
+/**
+ * 对于插件各参数的详细解析请参考
+ */
+tinkerSupport {
+
+    // 开启tinker-support插件，默认值true
+    enable = true
+
+    // 指定归档目录，默认值当前module的子目录tinker
+    autoBackupApkDir = "${bakPath}"
+
+    // 是否启用覆盖tinkerPatch配置功能，默认值false
+    // 开启后tinkerPatch配置不生效，即无需添加tinkerPatch
+    overrideTinkerPatchConfiguration = true
+
+    // 编译补丁包时，必需指定基线版本的apk，默认值为空
+    // 如果为空，则表示不是进行补丁包的编译
+    // @{link tinkerPatch.oldApk }
+    baseApk = "${bakPath}/${baseApkDir}/app-release.apk"
+
+    // 对应tinker插件applyMapping
+    baseApkProguardMapping = "${bakPath}/${baseApkDir}/app-release-mapping.txt"
+
+    // 对应tinker插件applyResourceMapping
+    baseApkResourceMapping = "${bakPath}/${baseApkDir}/app-release-R.txt"
+
+    // 构建基准包和补丁包都要指定不同的tinkerId，并且必须保证唯一性
+    tinkerId = "${base_TinkerId}"
+
+    // 构建多渠道补丁时使用
+    // buildAllFlavorsDir = "${bakPath}/${baseApkDir}"
+
+    // 是否开启反射Application模式
+    enableProxyApplication = true
+
+}
+
+/**
+ * 一般来说,我们无需对下面的参数做任何的修改
+ * 对于各参数的详细介绍请参考:
+ * https://github.com/Tencent/tinker/wiki/Tinker-%E6%8E%A5%E5%85%A5%E6%8C%87%E5%8D%97
+ */
+tinkerPatch {
+//    oldApk ="${bakPath}/${baseApkDir}/app-release.apk"
+    ignoreWarning = false
+    useSign = true
+    dex {
+        dexMode = "jar"
+        pattern = ["classes*.dex"]
+        loader = []
+    }
+    lib {
+        pattern = ["lib/*/*.so"]
+    }
+
+    res {
+        pattern = ["res/*", "r/*", "assets/*", "resources.arsc", "AndroidManifest.xml"]
+        ignoreChange = []
+        largeModSize = 100
+    }
+
+    packageConfig {
+    }
+    sevenZip {
+        zipArtifact = "com.tencent.mm:SevenZip:1.1.10"
+//        path = "/usr/local/bin/7za"
+    }
+    buildConfig {
+        keepDexApply = false
+//        tinkerId = "${patch_ThinkerId}-patch"
+//        applyMapping = "${bakPath}/${baseApkDir}/app-release-mapping.txt" //  可选，设置mapping文件，建议保持旧apk的proguard混淆方式
+//        applyResourceMapping = "${bakPath}/${baseApkDir}/app-release-R.txt" // 可选，设置R.txt文件，通过旧apk文件保持ResId的分配
+    }
+}

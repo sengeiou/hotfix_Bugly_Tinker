@@ -1,0 +1,258 @@
+
+一、Tinker
+接入
+http://blog.csdn.net/y97524027/article/details/52678428
+官方接入指南
+https://github.com/Tencent/tinker/wiki/Tinker-%E6%8E%A5%E5%85%A5%E6%8C%87%E5%8D%97
+
+Bugly Tinker
+https://bugly.qq.com/docs/user-guide/instruction-manual-android-hotfix/
+
+热更新能力是Bugly为解决开发者紧急修复线上bug，而无需重新发版让用户无感知就能把问题修复的一项能力。
+Bugly目前采用微信Tinker的开源方案，开发者只需要集成提供的SDK就可以实现自动下载补丁包、合成、并应用补丁的功能，
+也提供了热更新管理后台让开发者对每个版本补丁进行管理。
+为什么使用Bugly热更新？
+	无需关注Tinker是如何合成补丁的
+	无需自己搭建补丁管理后台
+	无需考虑后台下发补丁策略的任何事情
+	无需考虑补丁下载合成的时机，处理后台下发的策略
+	我们提供了更加方便集成Tinker的方式
+	我们通过HTTPS及签名校验等机制保障补丁下发的安全性
+	丰富的下发维度控制，有效控制补丁影响范围
+	我们提供了应用升级一站式解决方案
+
+二、一步步手动实现热修复
+https://code.csdn.net/u011064099/sahadevhotfix/tree/master
+demo：https://github.com/zhangquanit/hotfix_classloader
+
+1、dex文件的制作
+java->class->dex
+在android中使用DexClassLoader加载外部的dex
+DexClassLoader(String dexPath, String optimizedDirectory, String librarySearchPath, ClassLoader parent)
+DexClassLoader的构造方法需要4个参数，这里对这4个参数进行简要说明：
+String dexPath:dex文件的绝对路径。在这里我将其放入了应用的cache文件夹下。
+String optimizedDirectory:优化后的dex文件存放路径。DexClassLoader在构造完毕之后会对原有的dex文件优化并生成一个新的dex文件，在这里我选择的是.../cache/optimizedDirectory/目录。此外，API文档对该目录有严格的说明：Do not cache optimized classes on external storage.出于安全考虑，请不要将优化后的dex文件放入外部存储器中。
+String libraryPath:dex文件所需要的库文件路径。这里没有依赖，使用空字符串代替。
+ClassLoader parent:双亲委派模型中提到的父类加载器。这里我们使用默认的加载器，通过getClassLoader()方法获得。
+
+2、loadClass()
+protected Class<?> loadClass(String name, boolean resolve)
+	throws ClassNotFoundException
+{
+		// 首先查找该类是否已经被加载.
+		Class c = findLoadedClass(name);
+		if (c == null) {
+			long t0 = System.nanoTime();
+			try {
+				if (parent != null) { //如果该ClassLoader有父加载器，那么调用父加载器的loadClass()方法.
+					c = parent.loadClass(name, false);
+				} else { //如果没有父加载器，则调用findBootstrapClassOrNull()方法进行加载，该方法会使用引导类加载器进行加载。普通类是不会被该加载器加载到的，所以这里一般返回null.
+					c = findBootstrapClassOrNull(name);
+				}
+			} catch (ClassNotFoundException e) {
+				// ClassNotFoundException thrown if class not found
+				// from the non-null parent class loader
+			}
+
+			if (c == null) {
+				// 调用自身的findClass()方法进行查找。
+				long t1 = System.nanoTime();
+				c = findClass(name);
+
+				// this is the defining class loader; record the stats
+			}
+		}
+		return c;
+}
+
+protected Class<?> findClass(String name) throws ClassNotFoundException {
+    //ClassLoader的findClass()方法是个空方法，所以这个过程一般是由子加载器实现的
+	throw new ClassNotFoundException(name);
+}
+loadClass()方法大概做了以下工作：
+首先查找该类是否已经被加载.
+如果该ClassLoader有父加载器，那么调用父加载器的loadClass()方法.
+如果没有父加载器，则调用findBootstrapClassOrNull()方法进行加载，该方法会使用引导类加载器进行加载。普通类是不会被该加载器加载到的，所以这里一般返回null.
+如果前面的步骤都没找到，那调用自身的findClass()方法进行查找。
+
+
+
+public class BaseDexClassLoader extends ClassLoader
+public class DexClassLoader extends BaseDexClassLoader
+
+ClassLoader的findClass()方法是个空方法，所以这个过程一般是由子加载器实现的
+
+------------BaseDexClassLoader.java
+public class BaseDexClassLoader extends ClassLoader{
+  private final DexPathList pathList;
+  @Override
+    protected Class<?> findClass(String name) throws ClassNotFoundException {
+        Class clazz = pathList.findClass(name);
+
+        if (clazz == null) {
+            throw new ClassNotFoundException(name);
+        }
+
+        return clazz;
+    }
+}
+------------DexPathList.java
+public class DexPathList{
+public Class findClass(String name) {
+        for (Element element : dexElements) {
+            DexFile dex = element.dexFile;
+
+            if (dex != null) {
+                Class clazz = dex.loadClassBinaryName(name, definingContext);
+                if (clazz != null) {
+                    return clazz;
+                }
+            }
+        }
+
+        return null;
+    }
+ }
+}
+上述函数的大致逻辑为：遍历一个装在dex文件（每个dex文件实际上是一个DexFile对象）的数组（Element数组，Element是一个内部类），
+然后依次去加载所需要的class文件，直到找到为止。
+
+------------DexFile.java
+public class DexFile{
+
+    public Class loadClassBinaryName(String name, ClassLoader loader) {
+        return defineClass(name, loader, mCookie);
+    }
+
+    private native static Class defineClass(String name, ClassLoader loader, int cookie);
+
+}
+
+类的查找是通过遍历dexElements来进行查找的。所以为了实现替换效果，我们需要将DexClassLoader中的Element对象放到dexElements数组的第0个位置，
+这样才能在BaseDexClassLoader查找类时先找到DexClassLoader所用的user.dex中的类。
+
+3、Class文件的替换
+类的加载顺序
+类的加载是从上而下加载的，所以就算是DexClassLoader加载了外部的类，但是在系统使用类的时候还是会先在ClassLoader中查找，
+如果找不到则会在BaseDexClassLoader中查找，如果再找不到，就会进入PathClassLoader中查找，最后才会使用DexClassLoader进行查找，
+所以按照这个流程外部类是无法正常发挥作用的。所以我们的目的就是在查找工程内的类之前，先让加载器去外部的dex中查找。
+
+也就是说，将第二个dex放在dexElements数组中的第1位，这样就可以加载到外部的类。
+
+ClassLoader
+BaseDexClassLoader
+PathClassLoader ：Android应用就是用它来加载  PathClassLoader classLoader=(PathClassLoader)getClassLoader();
+DexClassLoader ：可以加载apk,jar,及dex文件，但PathClassLoader只能加载已安装到系统中（即/data/app目录下）的apk文件。
+
+
+
+---------------------------------插件化
+将一些独立的功能做成一个单独的apk，当打开的时候使用DexClassLoader动态加载，然后使用反射机制来调用插件中的类和方法。
+但这种方案存在着以下两个问题：
+1. 插件化只适合一些比较独立的模块；
+2. 必须通过反射机制去调用插件的类和方法，因此，必须搭配一套插件框架来配合使用；
+
+访问插件包中的资源
+//1、引入插件的AssetManager
+String apkPath="";
+AssetManager assetManager = AssetManager.class.newInstance();
+AssetManager.class.getDeclaredMethod("addAssetPath", String.class).invoke(
+        assetManager, apkPath);
+//2、获得插件的Resource
+new Resources(assetManager, context.getResources().getDisplayMetrics(), context.getResources().getConfiguration());
+//3、通过资源名字/类型/插件包名获取资源
+使用resources.getIdentifier(资源名称，资源类型，资源所在的包名)
+String str = resources.getString(resources.getIdentifier("app_name", "string", "h3c.plugina"));
+Drawable drawable=resources.getDrawable(resources.getIdentifier("ic_launcher", "mipmap", "h3c.plugina"))
+
+
+----------------------------------dex分包
+http://blog.csdn.net/vurtne_ye/article/details/39666381
+其原理是将编译好的class文件拆分打包成2个dex，绕过dex方法数量的限制以及安装时的检查，在运行时再动态加载第二个dex文件中。
+优点：
+1、绕过 一个dex文件最多只支持65536个方法 。(目前android已提供支持android-support-multidex)
+2、减少apk体积，可动态加载dex
+
+第一步：dex分包
+第二步：运行时动态加载第二个dex文件。
+
+
+------------------------------------Android分包MultiDex原理详解
+一、使用
+1、在build.gradle中添加配置
+android {
+    compileSdkVersion 21
+    buildToolsVersion "21.1.0"
+
+    defaultConfig {
+        ...
+        minSdkVersion 14
+        targetSdkVersion 21
+        ...
+
+        // 开启multiDex支持
+        multiDexEnabled true
+    }
+    ...
+}
+
+dependencies {
+  //引用multidex
+  compile 'com.android.support:multidex:1.0.1'
+}
+
+2、继承MutiDexApplication或者覆写Application中的attachBaseContext()方法.
+public class MyApplication extends MutiDexApplication
+           或
+public class MyApplication extends Application{
+   public  void onCreate(){
+       //初始化
+   }
+    @Override
+    protected void attachBaseContext(Context base) {
+        super.attachBaseContext(base);
+        MultiDex.install(this);
+    }
+}
+注意：attachBaseContext比onCreate()方法先执行，因此可在attachBaseContext方法中合成dex，因为我们一般都在onCreate中完成初始化，
+会引用其他类，所以必须在加载其他类之前完成dex合并
+
+http://blog.csdn.net/t12x3456/article/details/40837287
+http://www.mamicode.com/info-detail-1031299.html
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
