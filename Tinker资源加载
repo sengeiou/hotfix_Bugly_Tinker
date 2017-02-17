@@ -1,0 +1,213 @@
+
+一、Resource加载流程
+ 在Context中访问资源其实是是通过子类ContextImpl对象来实现的.在getResources和getAssets时是返回跟Resources类的对象mResources有关,
+ 而该对象是在ContextImpl构造的时候通过LoadedApk的方法和ActivityThread进行初始化.
+ private ContextImpl(ContextImpl container, ActivityThread mainThread,
+            LoadedApk packageInfo, IBinder activityToken, UserHandle user, boolean restricted,
+            Display display, Configuration overrideConfiguration, int createDisplayWithId) {
+        mOuterContext = this;
+
+        mMainThread = mainThread;
+        mActivityToken = activityToken;
+        mRestricted = restricted;
+
+            ......
+
+        Resources resources = packageInfo.getResources(mainThread);
+        if (resources != null) {
+            if (displayId != Display.DEFAULT_DISPLAY
+                    || overrideConfiguration != null
+                    || (compatInfo != null && compatInfo.applicationScale
+                            != resources.getCompatibilityInfo().applicationScale)) {
+                resources = mResourcesManager.getTopLevelResources(packageInfo.getResDir(),
+                        packageInfo.getSplitResDirs(), packageInfo.getOverlayDirs(),
+                        packageInfo.getApplicationInfo().sharedLibraryFiles, displayId,
+                        overrideConfiguration, compatInfo);
+            }
+        }
+        mResources = resources;
+
+       ..........
+    }
+
+--------------------LoadedApk
+public final class LoadedApk {
+
+    ...
+    private final String mResDir; //加载资源文件的路径,后面加载资源补丁的时候要hook属性为补丁的路径.
+    Resources mResources;
+
+  public LoadedApk(ActivityThread activityThread, ApplicationInfo aInfo,
+            CompatibilityInfo compatInfo, ClassLoader baseLoader,
+            boolean securityViolation, boolean includeCode, boolean registerPackage) {
+          mResDir = aInfo.uid == myUid ? aInfo.sourceDir : aInfo.publicSourceDir; //一般为安装的apk路径, /data/app/{package}-1/base.apk 或/data/app/{package}-2/base.apk
+     }
+
+    public AssetManager getAssets(ActivityThread mainThread) {
+        return getResources(mainThread).getAssets();
+    }
+
+    public Resources getResources(ActivityThread mainThread) {
+        if (mResources == null) {
+            mResources = mainThread.getTopLevelResources(mResDir, mSplitResDirs, mOverlayDirs,
+                    mApplicationInfo.sharedLibraryFiles, Display.DEFAULT_DISPLAY, null, this);
+        }
+        return mResources;
+    }
+    ...
+}
+--------------------ActivityThread
+public final class ActivityThread {
+final ArrayMap<String, WeakReference<LoadedApk>> mPackages //app加载过的LoadedApk对象
+		= new ArrayMap<String, WeakReference<LoadedApk>>();
+final ArrayMap<String, WeakReference<LoadedApk>> mResourcePackages
+		= new ArrayMap<String, WeakReference<LoadedApk>>();
+
+
+    ActivityThread() {
+        mResourcesManager = ResourcesManager.getInstance();
+    }
+
+	Resources getTopLevelResources(String resDir, String[] splitResDirs, String[] overlayDirs,
+			String[] libDirs, int displayId, Configuration overrideConfiguration,
+			LoadedApk pkgInfo) {
+			//使用ResourcesManager加载资源 ，Android 4.4版本之下是没有用ResourcesManager来管理资源的.做修复时也要区分开两种实现方式,
+		return mResourcesManager.getTopLevelResources(resDir, splitResDirs, overlayDirs, libDirs,
+				displayId, overrideConfiguration, pkgInfo.getCompatibilityInfo());
+	}
+}
+--------------------ResourcesManager
+public class ResourcesManager {
+private static ResourcesManager sResourcesManager;
+//每个apk的资源对应一个Resources对象,通过ResourcesKey来绑定唯一标识. 当从两个不同的apk文件中加载资源时会产生出两个ResourcesKey对应两个Resources.
+private final ArrayMap<ResourcesKey, WeakReference<Resources> > mActiveResources =
+		new ArrayMap<>();
+
+public static ResourcesManager getInstance() {
+	synchronized (ResourcesManager.class) {
+		if (sResourcesManager == null) {
+			sResourcesManager = new ResourcesManager();
+		}
+		return sResourcesManager;
+	}
+}
+
+ Resources getTopLevelResources(String resDir, String[] splitResDirs,
+            String[] overlayDirs, String[] libDirs, int displayId,
+            Configuration overrideConfiguration, CompatibilityInfo compatInfo) {
+
+        //创建ResourcesKey，每个apk对应一个ResourcesKey
+        final float scale = compatInfo.applicationScale;
+        Configuration overrideConfigCopy = (overrideConfiguration != null)
+                ? new Configuration(overrideConfiguration) : null;
+        ResourcesKey key = new ResourcesKey(resDir, displayId, overrideConfigCopy, scale);
+
+        Resources r;
+        synchronized (this) {
+             //从资源容器mActiveResources中查询Resources是否已经存在
+            WeakReference<Resources> wr = mActiveResources.get(key);
+            r = wr != null ? wr.get() : null;
+            if (r != null && r.getAssets().isUpToDate()) {
+                return r;
+            }
+        }
+
+        //创建 AssetManager
+        AssetManager assets = new AssetManager();
+        if (resDir != null) {
+		     //从资源路径resDir中加载资源
+            if (assets.addAssetPath(resDir) == 0) {
+                return null;
+            }
+        }
+
+        if (splitResDirs != null) {
+            for (String splitResDir : splitResDirs) {
+                if (assets.addAssetPath(splitResDir) == 0) {
+                    return null;
+                }
+            }
+        }
+
+        if (overlayDirs != null) {
+            for (String idmapPath : overlayDirs) {
+                assets.addOverlayPath(idmapPath);
+            }
+        }
+
+        if (libDirs != null) {
+            for (String libDir : libDirs) {
+                if (libDir.endsWith(".apk")) {
+                    if (assets.addAssetPath(libDir) == 0) {
+                        Log.w(TAG, "Asset path '" + libDir +
+                                "' does not exist or contains no resources.");
+                    }
+                }
+            }
+        }
+
+         //创建Resource对象
+        DisplayMetrics dm = getDisplayMetricsLocked(displayId);
+        Configuration config;
+        final boolean isDefaultDisplay = (displayId == Display.DEFAULT_DISPLAY);
+        final boolean hasOverrideConfig = key.hasOverrideConfiguration();
+        if (!isDefaultDisplay || hasOverrideConfig) {
+            config = new Configuration(getConfiguration());
+            if (!isDefaultDisplay) {
+                applyNonDefaultDisplayMetricsToConfigurationLocked(dm, config);
+            }
+            if (hasOverrideConfig) {
+                config.updateFrom(key.mOverrideConfiguration);
+                if (DEBUG) Slog.v(TAG, "Applied overrideConfig=" + key.mOverrideConfiguration);
+            }
+        } else {
+            config = getConfiguration();
+        }
+        r = new Resources(assets, dm, config, compatInfo);//根据assetManager、displayMetrics、Configuration
+
+
+        synchronized (this) {
+            WeakReference<Resources> wr = mActiveResources.get(key);
+            Resources existing = wr != null ? wr.get() : null;
+            if (existing != null && existing.getAssets().isUpToDate()) {
+                r.getAssets().close();
+                return existing;
+            }
+            //缓存到容器中
+            mActiveResources.put(key, new WeakReference<>(r));
+            return r;
+        }
+    }
+
+至此资源加载的流程就走了一圈, 结合要做资源更新的需求,我们可以整理一下资源替换的步骤.
+
+反射拿到ActivityThread对象持有的LoadedApk容器
+遍历容器中LoadedApk对象,反射替换mResDir属性为补丁物理路径.
+创建新的AssetManager, 并根据补丁路径反射调用addAssetPath将补丁加载到新的AssetManager中.
+反射获得ResourcesManager持有的Resources容器对象.
+遍历出容器中的Resources对象, 替换对象的属性为新的AssetManager, 并且根据原属性重新更新Resources对象的配置.
+
+
+
+SystemClassLoaderAdder.installDexes
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

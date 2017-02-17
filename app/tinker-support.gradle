@@ -55,7 +55,7 @@ tinkerSupport {
     // buildAllFlavorsDir = "${bakPath}/${baseApkDir}"
 
     // 是否开启反射Application模式
-    enableProxyApplication = true
+    enableProxyApplication = false
 
 }
 

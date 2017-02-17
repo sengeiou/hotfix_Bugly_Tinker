@@ -2,11 +2,20 @@
 https://zhuanlan.zhihu.com/kaede
 http://blog.csdn.net/googdev/article/details/53067400
 
+------Android 热补丁动态修复框架小结
+http://blog.csdn.net/lmj623565791/article/details/49883661/
+
+
 一、Tinker
-接入
 http://blog.csdn.net/y97524027/article/details/52678428
+Android 热修复 Tinker接入及源码浅析
+http://blog.csdn.net/lmj623565791/article/details/54882693
+Tinker dex补丁、资源补丁、SO补丁加载加载流程
+http://blog.csdn.net/l2show/article/details/53454933
+
 官方接入指南
 https://github.com/Tencent/tinker/wiki/Tinker-%E6%8E%A5%E5%85%A5%E6%8C%87%E5%8D%97
+
 
 Bugly Tinker
 https://bugly.qq.com/docs/user-guide/instruction-manual-android-hotfix/
@@ -26,60 +35,40 @@ Bugly目前采用微信Tinker的开源方案，开发者只需要集成提供的
 
 解决问题：
 1、Application动态替换
-2、两个相关联的类在不同的dex中
-参考：https://mp.weixin.qq.com/s?__biz=MzI1MTA1MzM2Nw==&mid=400118620&idx=1&sn=b4fdd5055731290eef12ad0d17f39d4a
+因为我们一般都在Application的onCreate完成一些应用的初始化，会处理很多模块的初始化工作，那么这些类就会被加载进来，此时再去做dex替换，显然是不行的
+因此解决思路就是替换Application，然后再替换的Application中动态转调自定义Application的相关生命周期函数。
 
-ModuleManager引用了QzoneActivityManager，这这两个类所在的dex不在一起，其中：
-1. ModuleManager在classes.dex中
-2. QzoneActivityManager在patch.dex中
-结果发生了错误。
-这里有个问题,拆分dex的很多类都不是在同一个dex内的,怎么没有问题?
+1）enableProxyApplication = true 开启反射Application模式，则编译期替换为TinkerPatchReflectApplication
+android:name="com.tencent.bugly.beta.tinker.TinkerPatchReflectApplication"
+2）enableProxyApplication = false，需要继承TinkerApplication，编译期不会替换Application
 
-从代码上来看，如果两个相关联的类在不同的dex中就会报错，但是拆分dex没有报错这是为什么，原来这个校验的前提是：
-if(!fromUnverifiedConstant&&IS_CLASS_FLAG_SET(referrer,CLASS_ISPREVERIFIED)){
+2、解决CLASS_ISPREVERIFIED的问题
+1）Qzone解决方案
+https://mp.weixin.qq.com/s?__biz=MzI1MTA1MzM2Nw==&mid=400118620&idx=1&sn=b4fdd5055731290eef12ad0d17f39d4a
+要阻止相关类打上CLASS_ISPREVERIFIED的标志，就是在构造函数中，引用别的dex文件，比如hack.dex的某个类即可
+假设你的app里面有个类叫做LoadBugClass，再其内部引用了BugClass。发布过程中发现BugClass有编写错误，那么想要发布一个新的BugClass类，那么你就要阻止LoadBugClass这个类打上CLASS_ISPREVERIFIED的标志。
+解决流程是：
+在dx工具执行之前，将LoadBugClass.class文件进行修改，再其构造中添加System.out.println(dodola.hackdex.AntilazyLoad.class)，然后继续打包的流程。注意：AntilazyLoad.class这个类是独立在hack.dex中
+A、如何去修改一个类的class文件
+可使用javassist来操作
+B、在dx之前去进行A的操作
 
-}
-如果引用者（也就是ModuleManager）这个类被打上了CLASS_ISPREVERIFIED标志，那么就会进行dex的校验。
-那么这个标志是什么时候被打上去的？在DexPrepare.cpp找到了一下代码：
-if(doVerify){
-     if(dvmVerifyClass(clazz)){
-           ((DexClassDef*) pClassDef)->accessFlags|=CLASS_ISPREVERIFIED;
-           verified=true;
-     }
-}
-这段代码是dex转化成odex(dexopt)的代码中的一段，我们知道当一个apk在安装的时候，apk中的classes.dex会被虚拟机(dexopt)优化成odex文件，然后才会拿去执行。
-虚拟机在启动的时候，会有许多的启动参数，其中一项就是verify选项，当verify选项被打开的时候，上面doVerify变量为true，那么就会执行dvmVerifyClass进行类的校验，
-如果dvmVerifyClass校验类成功，那么这个类会被打上CLASS_ISPREVERIFIED的标志,那么具体的校验过程是什么样子的呢？ 此代码在DexVerify.cpp中，如下
-1. 验证clazz->directMethods方法，directMethods包含了以下方法：
-    1). static方法
-    2). private方法
-    3). 构造函数
-2. clazz->virtualMethods
-    1). 虚函数=override方法?
-概括一下就是如果以上方法中直接引用到的类和class文件都在同一个dex中的话，那么这个类就会被打上CLASS_ISPREVERIFIED：
-classes.dex中
-public classA{
-  public A(){
-      System.out.println(AntilazyLoad.class);//如果A与AntilazyLoad在一个dex中的话，那么A这个类就会被打上CLASS_ISPREVERIFIED
-   }
-}
-public class AntilazyLoad{
+2）Tinker解决方案
+tinker是将patch.dex与app中的classes.dex合并后的全量dex插在数组的前面。
 
-}
-所以为了实现补丁方案，所以必须从这些方法中入手，防止类被打上CLASS_ISPREVERIFIED标志。
-最终QQ空间的方案是往所有类的构造函数里面插入了一段代码，代码如下：
-if (ClassVerifier.PREVENT_VERIFY) {
-   System.out.println(AntilazyLoad.class);
-}
-其中AntilazyLoad类会被打包成单独的hack.dex，这样当安装apk的时候，classes.dex内的类都会引用一个在不相同dex中的AntilazyLoad类，
-这样就防止了类被打上CLASS_ISPREVERIFIED的标志了，只要没被打上这个标志的类都可以进行打补丁操作。
-之所以选择构造函数是因为他不增加方法数，一个类即使没有显式的构造函数，也会有一个隐式的默认构造函数。
-空间使用的是在字节码插入代码,而不是源代码插入，使用的是javaassist库来进行字节码插入的。
+
 
 3、如何打包补丁包？
 1）. 空间在正式版本发布的时候，会生成一份缓存文件，里面记录了所有class文件的md5，还有一份mapping混淆文件。
 2）. 在后续的版本中使用-applymapping选项，应用正式版本的mapping文件，然后计算编译完成后的class文件的md5和正式版本进行比较，把不相同的class文件打包成补丁包。
 备注:该方案现在也应用到我们的编译过程当中,编译不需要重新打包dex,只需要把修改过的类的class文件打包成patch dex,然后放到sdcard下,那么就会让改变的代码生效。
+
+
+thinker解决方案：全量替换
+tinker将old.apk和new.apk做了diff，拿到patch.dex，然后将patch.dex与本机中apk的classes.dex做了合并，生成新的classes.dex，运行时通过反射将合并后的dex文件放置在加载的dexElements数组的前面。
+运行时替代的原理，其实和Qzone的方案差不多，都是去反射修改dexElements。
+两者的差异是：Qzone是直接将patch.dex插到数组的前面；而tinker是将patch.dex与app中的classes.dex合并后的全量dex插在数组的前面。
+tinker这么做的目的还是因为Qzone方案中提到的CLASS_ISPREVERIFIED的解决方案存在问题；而tinker相当于换个思路解决了该问题。
 
 
 二、热修复基础
