@@ -61,7 +61,13 @@ ClassLoader的findClass()方法是个空方法，所以这个过程一般是由�
 
 ------------BaseDexClassLoader.java
 public class BaseDexClassLoader extends ClassLoader{
-  private final DexPathList pathList;
+    private final DexPathList pathList;
+
+    public BaseDexClassLoader(String dexPath, File optimizedDirectory,
+            String libraryPath, ClassLoader parent) {
+        super(parent);
+        this.pathList = new DexPathList(this, dexPath, libraryPath, optimizedDirectory);
+    }
   @Override
     protected Class<?> findClass(String name) throws ClassNotFoundException {
         Class clazz = pathList.findClass(name);
@@ -74,22 +80,21 @@ public class BaseDexClassLoader extends ClassLoader{
     }
 }
 ------------DexPathList.java
-public class DexPathList{
-public Class findClass(String name) {
+final class DexPathList {
+    private final Element[] dexElements;
+    public Class findClass(String name, List<Throwable> suppressed) {
         for (Element element : dexElements) {
             DexFile dex = element.dexFile;
 
             if (dex != null) {
-                Class clazz = dex.loadClassBinaryName(name, definingContext);
+                Class clazz = dex.loadClassBinaryName(name, definingContext, suppressed);
                 if (clazz != null) {
                     return clazz;
                 }
             }
         }
-
         return null;
     }
- }
 }
 上述函数的大致逻辑为：遍历一个装在dex文件（每个dex文件实际上是一个DexFile对象）的数组（Element数组，Element是一个内部类），
 然后依次去加载所需要的class文件，直到找到为止。

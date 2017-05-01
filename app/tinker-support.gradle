@@ -5,8 +5,8 @@ def bakPath = file("${buildDir}/bakApk/")
 /**
  * 此处填写每次构建生成的基准包目录
  */
-def baseApkDir = "app-0214-14-21-46"
-def base_TinkerId="3.0.1-patch"
+def baseApkDir = "app-0215-17-40-25"
+def base_TinkerId="3.0.2-patch"
 /**
  * 1、基准版需要集成bugly sdk，tinkerId="1.0-base"；并安装上报联网
  * 2、对基准包的bug修复（可以是Java代码变更，资源的变更）
