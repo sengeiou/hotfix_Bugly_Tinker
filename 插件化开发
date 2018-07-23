@@ -98,7 +98,7 @@ public class CJClassLoader extends ClassLoader{
 }
 
 存在的问题
-动态类创建的方式，使得注册一个通用的Activity就能给多给Activity使用，对这种做法存在的问题也是明显的：
+动态类创建的方式，使得注册一个通用的Activity就能给多个Activity使用，对这种做法存在的问题也是明显的：
 使用同一个注册的Activity，所以一些需要在Manifest注册的属性无法做到每个Activity都自定义配置；
 插件中的权限，无法动态注册，插件需要的权限都得在宿主中注册，无法动态添加权限；
 插件的Activity无法开启独立进程，因为这需要在Manifest里面注册；
@@ -107,7 +107,7 @@ public class CJClassLoader extends ClassLoader{
 
 
 代理Activity模式与动态创建Activity模式的区别
-1）简单地说，最大的不同是代理模式使用了一个 代理的Activity，而动态创建Activity模式使用了一个 通用的Activity。
+1）简单地说，最大的不同是代理模式使用了一个代理的Activity，而动态创建Activity模式使用了一个 通用的Activity。
 2）代理Activity是一个标准的Android Activity组件，具有生命周期和上下文环境，但是它自身只是一个空壳，并没有承担什么业务逻辑
 而插件Activity其实只是一个普通的Java对象，它没有上下文环境，但是却能正常执行业务逻辑的代码。代理Activity和不同的插件Activity配合起来，就能完成不同的业务逻辑了。
 3）动态创建Activity模式，被动态创建出来的Activity类是有在主项目里面注册的，它是一个标准的Activity，它有自己的Context和生命周期，不需要代理的Activity。
